@@ -1,0 +1,134 @@
+import time
+import random
+import pandas as pd
+import numpy as np
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+import matplotlib.pyplot as plt
+
+# data from simulation
+
+# Dispersal rate data
+dr2 = [0.6695, 0.6699, 0.4869, 0.4922, 0.3832, 0.3854, 0.3131, 0.3148]
+dr5 = [0.4081, 0.4100, 0.2488, 0.2482, 0.1680, 0.1702, 0.1069, 0.1099]
+dr10 = [0.2458, 0.2466, 0.119, 0.1226, 0.0431, 0.0522, 0.0243, 0.0283]
+
+# Sex ratio data
+sr2 = [0.2228, 0.2269, 0.2073, 0.2149, 0.1961, 0.2000, 0.1950, 0.1950]
+sr5 = [0.3708, 0.3709, 0.3470, 0.3470, 0.3062, 0.3219, 0.2728, 0.2808]
+sr10 = [0.4169, 0.4227, 0.3740, 0.3922, 0.3278, 0.3365, 0.3892, 0.3796]
+
+# Put data together
+d_list = dr2 + dr5 + dr10
+s_list = sr2 + sr5 + sr10
+n_list = [2] * 8 + [5] * 8 + [10] * 8
+dict = {'d': d_list, 's': s_list, 'n': n_list}
+df = pd.DataFrame(dict)
+print(df)
+
+md = smf.mixedlm('s ~ d', df, groups=df['n'])
+mdf = md.fit()
+print(mdf.summary())
+
+# Set up Monte Carlo Permutation test
+
+# Define function to permute the SR value amongst the DR value, holding n fixed
+s_list_all = [sr2, sr5, sr10]
+print(s_list_all)
+
+def permute(s_list_all, d_list, n_list):
+    shuffled_s_list = []
+    for item in s_list_all:
+        list_copy = item[:]
+        random.shuffle(list_copy)
+        shuffled_s_list += list_copy
+    df_dict = {'d': d_list, 'n': n_list, 's': shuffled_s_list}
+    shuffled_df = pd.DataFrame(df_dict)
+    return shuffled_df
+
+
+# Function the outputs the lME regression model for each permutation
+def get_model(shuffled_df):
+    md = smf.mixedlm('s ~ d', shuffled_df, groups=df['n'])
+    mdf = md.fit()
+    return mdf
+
+
+# Function that just outputs the lME regression coefficient for each permutation
+def get_coef(shuffled_df):
+    md = smf.mixedlm('s ~ d', shuffled_df, groups=df['n'])
+    mdf = md.fit()
+    coef = mdf.params[1]
+    return coef
+
+
+# Define ab-line function to plot regression lines
+def abline(slope, intercept, col):
+    axes = plt.gca()
+    x_vals = np.array(axes.get_xlim())
+    y_vals = intercept + slope * x_vals
+    plt.plot(x_vals, y_vals, '--', color=col)
+
+
+# plot regression lines for a given permutation
+def plot_model(df, filename):
+    model = get_model(df)
+    # plot the shuffled points
+    plt.plot(dr2, df['s'][0:8], 'o', color='darkgrey', alpha=0.5)
+    plt.plot(dr5, df['s'][8:16], 'o', color='grey', alpha=0.5)
+    plt.plot(dr10, df['s'][16:24], 'o', color='dimgrey', alpha=0.5)
+    plt.xlabel('Average dispersal rate')
+    plt.ylabel('Actual sex allocation')
+    plt.ylim(0, 0.5)
+    plt.xlim(0, 1)
+
+    coef = model.params[1]
+    intercept = model.params[0]
+    RE = model.random_effects
+    abline(coef, intercept + float(RE[2]), 'darkgrey')
+    abline(coef, intercept + float(RE[5]), 'grey')
+    abline(coef, intercept + float(RE[10]), 'dimgrey')
+    plt.title('coef: ' + str(coef))
+    plt.savefig(filename + '.pdf', bbox_inches='tight')
+
+
+# Plot regression line for actual data
+# plot_model(df, 'regr_actual_prelim')
+
+# Plot regression for example permuted data
+# plot_model(permute(s_list_all, d_list, n_list), 'regr_permuted_prelim')
+
+# Permute data P times
+P = 100000
+coef_list = []
+
+start_time = time.time()
+
+for i in range(P):
+    result = get_coef(permute(s_list_all, d_list, n_list))
+    coef_list.append(result)
+
+print("--- %s seconds ---" % (time.time() - start_time))
+
+# Plot the results as histogram, alongside the coefficient of actual data
+histogram = plt.hist(coef_list, bins=40, density=False, color='darkgrey')
+max_frequency = int(max(histogram[0]))
+plt.plot([get_coef(df)] * max_frequency, range(0, max_frequency), '--', color='k')
+plt.xlabel('Regression coefficient')
+plt.savefig('hist.pdf', bbox_inches='tight')
+
+
+# Calculation of p-value
+
+# Function to find number of item in list that >= test statistic
+def calculate_p(x, coef_list):
+    count = 0
+    for item in coef_list:
+        if item >= x:
+            count += 1
+    p = (count + 1) / (len(coef_list) + 1)
+    return p
+
+
+p_val = calculate_p(get_coef(df), coef_list)
+print(p_val)
